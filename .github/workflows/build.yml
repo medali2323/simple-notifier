@@ -24,7 +24,7 @@ jobs:
       
       - name: Build EXE avec options
         run: |
-          pyinstaller --onefile --windowed --noupx --clean --name ZoneX --icon zonex.ico --add-data "zonex.ico;." --add-data "images/zonex.png;images" --add-data "images/mqtt_succee.png;images" --add-data ".env;." simple_notifier.py
+          pyinstaller --onefile --windowed --noupx --clean --name ZoneX --icon zonex.ico --add-data "zonex.ico;." --add-data "images/zonex.png;." --add-data "images/mqtt_succee.png;." --add-data ".env;." simple_notifier.py
       
       - name: Create package
         shell: pwsh
@@ -32,8 +32,8 @@ jobs:
           New-Item -ItemType Directory -Force -Path package
           Copy-Item dist\ZoneX.exe package\
           Copy-Item .env package\
-          New-Item -ItemType Directory -Force -Path package\images
-          Copy-Item images\* package\images\
+          Copy-Item images\zonex.png package\
+          Copy-Item images\mqtt_succee.png package\
           "Lancer ZoneX.exe" | Out-File -FilePath package\LIRE_MOI.txt -Encoding utf8
       
       - name: Create ZIP
