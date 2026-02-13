@@ -2684,565 +2684,6 @@ except:
     notification_queue = queue.Queue()
     CONFIG = {}
 
-# class MQTTListener:
-#     def __init__(self, ui_ref=None):
-#         logging.info("📡 Initialisation MQTT Listener avec machine tracking")
-#         self.ui_ref = ui_ref
-        
-#         # Générer les infos de la machine
-#         self.machine_info = self._get_machine_info()
-        
-#         # Créer client_id avec machine_id
-#         client_id = self._generate_client_id()
-        
-#         self.client = mqtt.Client(
-#             client_id=client_id, 
-#             clean_session=True,
-#             callback_api_version=mqtt.CallbackAPIVersion.VERSION2
-#         )
-        
-#         self.client.on_connect = self.on_connect
-#         self.client.on_disconnect = self.on_disconnect
-#         self.client.on_message = self.on_message
-        
-#         # Variables de contrôle
-#         self.last_connect_time = 0
-#         self.ignore_retain_until = 0
-#         self.is_running = True
-#         self.connection_thread = None
-#         self.reconnect_count = 0
-#         self.last_heartbeat_check = time.time()
-        
-#         # ✅ NOUVEAU : Gestion robuste des messages
-#         self.mqtt_db = None
-#         self.db_ready = threading.Event()  # ✅ Signal quand DB est prête
-#         self.db_init_thread = None
-#         self.pending_messages = []
-#         self.pending_lock = threading.Lock()
-#         self.pending_file = Path("pending_mqtt_messages.pkl")  # ✅ Persistance sur disque
-#         self.max_pending = 10000  # ✅ Buffer plus grand
-#         self.failed_messages = []  # ✅ Messages échoués pour retry
-#         self.retry_thread = None
-        
-#         # ✅ CHANGEMENT 1 : Charger messages pendants du disque
-#         self._load_pending_from_disk()
-        
-#         # ✅ CHANGEMENT 2 : Init DB EN PRIORITÉ (synchrone)
-       
-#         threading.Thread(target=self.init_db_sync, daemon=True).start()
-
-#         logging.info(f"🖥️  MQTT Listener prêt pour machine: {self.machine_info['hostname']} (ID: {self.machine_info['machine_id']})")
-    
-#     def _load_pending_from_disk(self):
-#         """✅ Charge les messages non envoyés depuis le disque"""
-#         try:
-#             if self.pending_file.exists():
-#                 with open(self.pending_file, 'rb') as f:
-#                     self.pending_messages = pickle.load(f)
-#                 logging.info(f"📦 {len(self.pending_messages)} messages chargés depuis le disque")
-#         except Exception as e:
-#             logging.error(f"❌ Erreur chargement messages: {e}")
-#             self.pending_messages = []
-    
-#     def _save_pending_to_disk(self):
-#         """✅ Sauvegarde les messages en attente sur le disque"""
-#         try:
-#             with self.pending_lock:
-#                 if self.pending_messages:
-#                     with open(self.pending_file, 'wb') as f:
-#                         pickle.dump(self.pending_messages, f)
-#                     logging.debug(f"💾 {len(self.pending_messages)} messages sauvegardés sur disque")
-#                 elif self.pending_file.exists():
-#                     self.pending_file.unlink()  # Supprimer si vide
-#         except Exception as e:
-#             logging.error(f"❌ Erreur sauvegarde messages: {e}")
-    
-#     def init_db_sync(self):
-#         """✅ NOUVEAU : Initialise la DB de manière SYNCHRONE (bloquante)"""
-#         try:
-#             logging.info("💾 Initialisation DB MySQL (prioritaire)...")
-#             self.mqtt_db = MQTTDBHandler()
-            
-#             # ✅ Vérifier que la connexion fonctionne
-#             if self.mqtt_db and self.mqtt_db.pool:
-#                 logging.info("✅ DB MySQL initialisée et connectée")
-#                 self.db_ready.set()  # ✅ Signal que la DB est prête
-                
-#                 # ✅ Vider le buffer après init
-#                 self.flush_pending_messages()
-                
-#                 # ✅ Démarrer thread retry
-#                 self.start_retry_worker()
-#             else:
-#                 raise Exception("Pool de connexion non créé")
-                
-#         except Exception as e:
-#             logging.error(f"❌ CRITIQUE : Échec init DB: {e}")
-#             self.mqtt_db = None
-#             # ✅ On continue quand même, les messages seront bufferisés
-    
-#     def start_retry_worker(self):
-#         """✅ NOUVEAU : Thread qui retente d'envoyer les messages échoués"""
-#         def retry_worker():
-#             while self.is_running:
-#                 time.sleep(10)  # Retry toutes les 10 secondes
-                
-#                 if not self.mqtt_db or not self.db_ready.is_set():
-#                     continue
-                
-#                 # Réessayer les messages échoués
-#                 with self.pending_lock:
-#                     if self.failed_messages:
-#                         logging.info(f"🔄 Retry de {len(self.failed_messages)} messages échoués")
-                        
-#                         retry_list = self.failed_messages.copy()
-#                         self.failed_messages.clear()
-                        
-#                         for msg_data in retry_list:
-#                             try:
-#                                 self.mqtt_db.save_message_async(**msg_data)
-#                             except Exception as e:
-#                                 logging.warning(f"⚠️ Échec retry: {e}")
-#                                 self.failed_messages.append(msg_data)
-        
-#         self.retry_thread = threading.Thread(
-#             target=retry_worker,
-#             daemon=True,
-#             name="MQTT-Retry-Worker"
-#         )
-#         self.retry_thread.start()
-#         logging.info("🔄 Worker retry démarré")
-    
-#     def flush_pending_messages(self):
-#         """✅ Envoie tous les messages en attente vers la DB"""
-#         with self.pending_lock:
-#             if not self.pending_messages:
-#                 logging.debug("📭 Aucun message en attente")
-#                 return
-            
-#             logging.info(f"📤 Envoi de {len(self.pending_messages)} messages en attente vers DB...")
-            
-#             success_count = 0
-#             fail_count = 0
-            
-#             for msg_data in self.pending_messages:
-#                 try:
-#                     self.mqtt_db.save_message_async(**msg_data)
-#                     success_count += 1
-#                 except Exception as e:
-#                     logging.warning(f"⚠️ Erreur envoi message: {e}")
-#                     self.failed_messages.append(msg_data)  # ✅ Ajouter aux échecs
-#                     fail_count += 1
-            
-#             # Vider le buffer
-#             self.pending_messages.clear()
-#             self._save_pending_to_disk()  # ✅ Nettoyer le disque
-            
-#             logging.info(f"✅ {success_count} envoyés, {fail_count} échoués")
-    
-#     def _get_machine_info(self):
-#         """Récupère les informations uniques de la machine"""
-#         try:
-#             import platform
-#             import uuid
-#             import hashlib
-            
-#             # Nom d'hôte
-#             hostname = platform.node()
-            
-#             # Adresse MAC
-#             mac_num = hex(uuid.getnode()).replace('0x', '').upper()
-#             mac = ':'.join(mac_num[i:i+2] for i in range(0, 11, 2)) if len(mac_num) >= 12 else '00:00:00:00:00:00'
-            
-#             # Adresse IP
-#             try:
-#                 s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-#                 s.connect(('8.8.8.8', 80))
-#                 ip = s.getsockname()[0]
-#                 s.close()
-#             except:
-#                 try:
-#                     ip = socket.gethostbyname(hostname)
-#                 except:
-#                     ip = '127.0.0.1'
-            
-#             # Générer un ID unique
-#             unique_string = f"{hostname}_{mac}_{ip}"
-#             machine_id = hashlib.md5(unique_string.encode()).hexdigest()[:12]
-            
-#             machine_info = {
-#                 'machine_id': f"PC_{machine_id}",
-#                 'hostname': hostname,
-#                 'ip': ip,
-#                 'mac': mac,
-#                 'system': platform.system(),
-#                 'release': platform.release()
-#             }
-            
-#             return machine_info
-            
-#         except Exception as e:
-#             logging.error(f"❌ Erreur récupération infos machine: {e}")
-#             import uuid
-#             return {
-#                 'machine_id': f"PC_{uuid.uuid4().hex[:8]}",
-#                 'hostname': 'unknown',
-#                 'ip': '127.0.0.1',
-#                 'mac': '00:00:00:00:00:00',
-#                 'system': 'unknown',
-#                 'release': 'unknown'
-#             }
-    
-#     def _generate_client_id(self):
-#         """Génère un client_id unique avec machine_id"""
-#         timestamp = int(time.time())
-#         random_suffix = random.randint(1000, 9999)
-#         machine_short_id = self.machine_info['machine_id'].replace('PC_', '')[:6]
-#         return f"zonex_{machine_short_id}_{timestamp}_{random_suffix}"
-    
-#     def on_connect(self, client, userdata, flags, reason_code, properties):
-#         """Callback pour connexion MQTT"""
-#         current_time = time.time()
-        
-#         if reason_code == 0:
-#             self.reconnect_count = 0
-#             self.last_heartbeat_check = current_time  # ✅ Reset heartbeat
-#             logging.info(f"✅ Connecté au broker MQTT depuis {self.machine_info['hostname']}")
-            
-#             # Gérer reconnexion
-#             if current_time - self.last_connect_time < 30:
-#                 logging.info("⚠️ Reconnexion rapide - ignore retain 30s")
-#                 self.ignore_retain_until = current_time + 30
-            
-#             self.last_connect_time = current_time
-            
-#             # ✅ Mettre à jour UI dans le thread Tkinter
-#             if self.ui_ref:
-#                 try:
-#                     self.ui_ref.root.after(0, lambda: self.ui_ref.update_mqtt_status(True))
-#                 except Exception as e:
-#                     logging.warning(f"⚠️ Erreur MAJ UI: {e}")
-            
-#             # S'abonner avec vérification
-#             try:
-#                 if 'mqtt_topic' in CONFIG:
-#                     topic = CONFIG['mqtt_topic']
-#                     result, mid = client.subscribe(topic, qos=1)
-#                     if result == mqtt.MQTT_ERR_SUCCESS:
-#                         logging.info(f"✅ Souscrit: {topic} (QoS 1)")
-#                     else:
-#                         logging.error(f"❌ Échec souscription: {result}")
-#                 else:
-#                     result, mid = client.subscribe("alert_grouped/#", qos=1)
-#                     if result == mqtt.MQTT_ERR_SUCCESS:
-#                         logging.info(f"✅ Souscrit au topic par défaut: alert_grouped/# (QoS 1)")
-#                     else:
-#                         logging.error(f"❌ Échec souscription au topic par défaut: {result}")
-                        
-#             except Exception as e:
-#                 logging.error(f"❌ Erreur lors de la souscription: {e}")
-#         else:
-#             self.reconnect_count += 1
-#             logging.error(f"❌ Erreur connexion MQTT: {reason_code} (reconnexion #{self.reconnect_count})")
-#             if self.ui_ref:
-#                 try:
-#                     self.ui_ref.root.after(0, lambda: self.ui_ref.update_mqtt_status(False))
-#                 except:
-#                     pass
-    
-#     def on_disconnect(self, client, userdata, disconnect_flags, reason_code, properties):
-#         """Callback pour déconnexion MQTT"""
-#         logging.warning(f"⚠️ Déconnecté du broker MQTT depuis {self.machine_info['hostname']} - Raison: {reason_code}")
-#         self.last_connect_time = time.time()
-        
-#         # ✅ Mettre à jour UI immédiatement
-#         if self.ui_ref:
-#             try:
-#                 self.ui_ref.root.after(0, lambda: self.ui_ref.update_mqtt_status(False))
-#             except:
-#                 pass
-        
-#         # Afficher message explicite selon le code d'erreur
-#         if reason_code == 7:
-#             logging.warning("🌐 Perte de connexion réseau détectée")
-#         elif reason_code != 0:
-#             logging.warning(f"🔌 Déconnexion inattendue (code: {reason_code})")
-    
-#     def on_message(self, client, userdata, msg):
-#         """Callback pour message MQTT"""
-#         try:
-#             current_time = time.time()
-#             self.last_heartbeat_check = current_time
-            
-#             if msg.retain and current_time < self.ignore_retain_until:
-#                 logging.info(f"⏸️ Message retain ignoré: {msg.topic}")
-#                 return
-            
-#             payload = msg.payload.decode('utf-8')
-#             mqtt_topic = msg.topic
-            
-#             logging.info(f"📩 Message reçu sur {mqtt_topic}")
-            
-#             try:
-#                 data = json.loads(payload)
-#                 x = str(data[0].get('catagories')[0].get('alarms')[0].get('company'))
-#                 company_from_config = str(CONFIG['company_id'])
-#                 result = x == company_from_config
-#                 logging.info(f" on message /  company list {x} / company app {CONFIG['company_id']} / {result}")
-#                 if result:                
-#                     # Préparer les données du message
-#                     client_id_value = self._get_client_id()
-                    
-#                     msg_data = {
-#                         'topic': mqtt_topic,
-#                         'payload': data,
-#                         'qos': msg.qos,
-#                         'retain': msg.retain,
-#                         'client_id': client_id_value,
-#                         'machine_info': self.machine_info
-#                     }
-                    
-#                     # ✅ AMÉLIORATION : Gestion robuste de la sauvegarde
-#                     if self.db_ready.is_set() and self.mqtt_db:
-#                         # DB prête : sauvegarder directement
-#                         try:
-#                             self.mqtt_db.save_message_async(**msg_data)
-#                             logging.debug("✅ Message envoyé à DB")
-#                         except Exception as e:
-#                             logging.warning(f"⚠️ Échec sauvegarde DB, ajout au buffer retry: {e}")
-#                             with self.pending_lock:
-#                                 self.failed_messages.append(msg_data)  # ✅ Retry plus tard
-#                     else:
-#                         # DB pas prête : buffer + disque
-#                         with self.pending_lock:
-#                             if len(self.pending_messages) < self.max_pending:
-#                                 self.pending_messages.append(msg_data)
-#                                 logging.debug(f"📦 Message bufferisé ({len(self.pending_messages)}/{self.max_pending})")
-                                
-#                                 # ✅ Sauvegarder périodiquement sur disque
-#                                 if len(self.pending_messages) % 100 == 0:
-#                                     self._save_pending_to_disk()
-#                             else:
-#                                 logging.error(f"🔴 CRITIQUE : Buffer plein ({self.max_pending}), message PERDU !")
-#                                 # ✅ Forcer sauvegarde disque même si buffer plein
-#                                 self._save_pending_to_disk()
-                    
-#                     # ✅ Toujours traiter le message pour notification
-#                     notification_queue.put((data, mqtt_topic))
-                
-#             except json.JSONDecodeError as e:
-#                 logging.error(f"❌ Erreur parsing JSON: {e}")
-                
-#         except Exception as e:
-#             logging.error(f"❌ Erreur traitement message: {e}", exc_info=True)
-    
-#     def _get_client_id(self):
-#         """✅ Récupère le client_id de manière sûre"""
-#         try:
-#             if hasattr(self.client, '_client_id'):
-#                 if isinstance(self.client._client_id, bytes):
-#                     return self.client._client_id.decode('utf-8')
-#                 else:
-#                     return str(self.client._client_id)
-#         except:
-#             pass
-#         return self._generate_client_id()
-    
-#     def check_network_availability(self):
-#         """Vérifie si Internet est disponible"""
-#         try:
-#             socket.setdefaulttimeout(3)
-#             socket.gethostbyname('www.google.com')
-#             return True
-#         except:
-#             return False
-#         finally:
-#             socket.setdefaulttimeout(None)
-    
-#     def wait_for_network(self, max_wait=60):
-#         """Attend que le réseau soit disponible"""
-#         logging.info("🔍 Attente disponibilité réseau...")
-#         start_time = time.time()
-        
-#         while time.time() - start_time < max_wait and self.is_running:
-#             if self.check_network_availability():
-#                 logging.info("✅ Réseau disponible")
-#                 return True
-            
-#             logging.debug("⏳ Réseau non disponible, attente 3s...")
-#             time.sleep(3)
-        
-#         logging.warning("⏰ Timeout attente réseau")
-#         return False
-    
-#     def start_heartbeat_monitor(self):
-#         """✅ Moniteur actif - détecte ET force la reconnexion"""
-#         def monitor():
-#             logging.info("💓 Démarrage moniteur heartbeat")
-            
-#             while self.is_running:
-#                 time.sleep(2)  # Vérifier toutes les 2 secondes
-                
-#                 current_time = time.time()
-#                 time_since_last = current_time - self.last_heartbeat_check
-                
-#                 # ✅ Si pas de signe de vie depuis 8s
-#                 if time_since_last > 8:
-                    
-#                     # ✅ Vérifier vraiment l'état de la connexion
-#                     if not self.client.is_connected():
-#                         logging.warning(f"⚠️ Déconnexion détectée ({time_since_last:.0f}s sans activité)")
-                        
-#                         # ✅ Mettre à jour UI
-#                         if self.ui_ref:
-#                             try:
-#                                 self.ui_ref.root.after(0, lambda: self.ui_ref.update_mqtt_status(False))
-#                             except:
-#                                 pass
-                        
-#                         # ✅✅✅ FORCER LA RECONNEXION
-#                         try:
-#                             logging.info("🔄 Force reconnexion...")
-#                             self.client.reconnect()
-#                             self.last_heartbeat_check = current_time
-#                         except Exception as e:
-#                             logging.debug(f"⚠️ Reconnexion impossible: {e}")
-#                     else:
-#                         # Connecté mais pas de message → reset timer
-#                         self.last_heartbeat_check = current_time
-        
-#         threading.Thread(target=monitor, daemon=True, name="MQTT-Heartbeat").start()
-    
-#     def connect_with_retry(self):
-#         """Connexion avec reconnexion automatique"""
-        
-#         # ✅ Configuration reconnexion automatique RAPIDE
-#         self.client.reconnect_delay_set(min_delay=1, max_delay=30)
-        
-#         while self.is_running:
-#             try:
-#                 # Vérifier réseau
-#                 if not self.check_network_availability():
-#                     logging.info("⏳ Pas de réseau, attente...")
-#                     if not self.wait_for_network(max_wait=60):
-#                         time.sleep(3)
-#                         continue
-                
-#                 logging.info(f"🔗 Connexion MQTT depuis {self.machine_info['hostname']}...")
-                
-#                 try:
-#                     # ✅ Keepalive 15s (compromis entre 5 et 30)
-#                     self.client.connect(
-#                         CONFIG.get('mqtt_broker', 'localhost'),
-#                         CONFIG.get('mqtt_port', 1883),
-#                         keepalive=15
-#                     )
-#                 except Exception as e:
-#                     logging.error(f"❌ Échec connexion: {e}")
-#                     time.sleep(3)
-#                     continue
-                
-#                 logging.info("✅ Lancement boucle MQTT...")
-                
-#                 # ✅ Boucle avec reconnexion automatique
-#                 self.client.loop_forever(retry_first_connection=True)
-                
-#                 if not self.is_running:
-#                     break
-                    
-#                 logging.warning("⚠️ Boucle MQTT terminée, redémarrage...")
-#                 time.sleep(2)
-                
-#             except KeyboardInterrupt:
-#                 break
-#             except Exception as e:
-#                 logging.error(f"❌ Erreur: {e}")
-#                 time.sleep(3)
-    
-#     def start(self):
-#         """Démarre le listener MQTT"""
-#         if self.connection_thread and self.connection_thread.is_alive():
-#             logging.warning("⚠️ MQTT Listener déjà démarré")
-#             return
-        
-#         self.is_running = True
-        
-#         # ✅ DB déjà initialisée dans __init__, on démarre juste MQTT
-#         self.connection_thread = threading.Thread(
-#             target=self.connect_with_retry,
-#             daemon=True,
-#             name=f"MQTT-Thread-{self.machine_info['hostname']}"
-#         )
-#         self.connection_thread.start()
-        
-#         # Démarrer heartbeat
-#         self.start_heartbeat_monitor()
-        
-#         logging.info(f"✅ MQTT Listener démarré sur {self.machine_info['hostname']}")
-    
-#     def stop(self):
-#         """Arrête proprement le listener"""
-#         logging.info(f"🛑 Arrêt du MQTT Listener...")
-#         self.is_running = False
-        
-#         # ✅ Sauvegarder les messages en attente
-#         self._save_pending_to_disk()
-        
-#         if self.mqtt_db:
-#             self.mqtt_db.stop()
-        
-#         try:
-#             self.client.disconnect()
-#             self.client.loop_stop()
-#         except:
-#             pass
-        
-#         if self.connection_thread:
-#             self.connection_thread.join(timeout=5)
-        
-#         logging.info("✅ MQTT Listener arrêté")
-    
-#     def publish(self, topic, payload, qos=1, retain=False):
-#         """Publie un message MQTT"""
-#         try:
-#             if isinstance(payload, dict):
-#                 payload = json.dumps(payload)
-            
-#             result = self.client.publish(topic, payload, qos=qos, retain=retain)
-            
-#             if result.rc == mqtt.MQTT_ERR_SUCCESS:
-#                 logging.info(f"✅ Publié sur {topic} (QoS {qos})")
-#                 return True
-#             else:
-#                 logging.error(f"❌ Erreur publication: {result.rc}")
-#                 return False
-#         except Exception as e:
-#             logging.error(f"❌ Exception publication: {e}")
-#             return False
-    
-#     def get_status(self):
-#         """Retourne le statut du listener"""
-#         with self.pending_lock:
-#             pending_count = len(self.pending_messages)
-#             failed_count = len(self.failed_messages)
-        
-#         db_connected = False
-#         if self.mqtt_db and hasattr(self.mqtt_db, 'pool'):
-#             db_connected = self.mqtt_db.pool is not None
-        
-#         return {
-#             'machine_id': self.machine_info['machine_id'],
-#             'hostname': self.machine_info['hostname'],
-#             'ip': self.machine_info['ip'],
-#             'is_running': self.is_running,
-#             'connected': self.client.is_connected(),
-#             'reconnect_count': self.reconnect_count,
-#             'last_connect': self.last_connect_time,
-#             'db_connected': db_connected,
-#             'db_ready': self.db_ready.is_set(),  # ✅ NOUVEAU
-#             'pending_messages': pending_count,
-#             'failed_messages': failed_count     # ✅ NOUVEAU
-#         } 
 class MQTTListener:
     def __init__(self, ui_ref=None):
         logging.info("📡 Initialisation MQTT Listener avec machine tracking")
@@ -3283,9 +2724,6 @@ class MQTTListener:
         self.failed_messages = []  # ✅ Messages échoués pour retry
         self.retry_thread = None
         
-        self.recent_messages = []
-        self.recent_lock = threading.Lock()
-        self.max_recent = 100
         # ✅ CHANGEMENT 1 : Charger messages pendants du disque
         self._load_pending_from_disk()
         
@@ -3294,22 +2732,7 @@ class MQTTListener:
         threading.Thread(target=self.init_db_sync, daemon=True).start()
 
         logging.info(f"🖥️  MQTT Listener prêt pour machine: {self.machine_info['hostname']} (ID: {self.machine_info['machine_id']})")
-    def _get_message_hash(self, topic, payload):
-        """Hash unique pour détecter les doublons"""
-        import hashlib
-        content = f"{topic}:{payload}:{int(time.time() / 5)}"
-        return hashlib.md5(content.encode()).hexdigest()[:16]
-
-    def _is_duplicate(self, topic, payload):
-        """Vérifie si message déjà vu"""
-        msg_hash = self._get_message_hash(topic, payload)
-        with self.recent_lock:
-            if msg_hash in self.recent_messages:
-                return True
-            self.recent_messages.append(msg_hash)
-            if len(self.recent_messages) > self.max_recent:
-                self.recent_messages.pop(0)
-            return False
+    
     def _load_pending_from_disk(self):
         """✅ Charge les messages non envoyés depuis le disque"""
         try:
@@ -3487,9 +2910,9 @@ class MQTTListener:
             logging.info(f"✅ Connecté au broker MQTT depuis {self.machine_info['hostname']}")
             
             # Gérer reconnexion
-            if current_time - self.last_connect_time < 60:
-                logging.info("⚠️ Reconnexion rapide - ignore retain 60s")
-                self.ignore_retain_until = current_time + 60
+            if current_time - self.last_connect_time < 30:
+                logging.info("⚠️ Reconnexion rapide - ignore retain 30s")
+                self.ignore_retain_until = current_time + 30
             
             self.last_connect_time = current_time
             
@@ -3551,78 +2974,68 @@ class MQTTListener:
             current_time = time.time()
             self.last_heartbeat_check = current_time
             
+            if msg.retain and current_time < self.ignore_retain_until:
+                logging.info(f"⏸️ Message retain ignoré: {msg.topic}")
+                return
+            
             payload = msg.payload.decode('utf-8')
             mqtt_topic = msg.topic
             
-            # ✅ 1. Vérifier doublon en PREMIER (avant tout traitement)
-            if self._is_duplicate(mqtt_topic, payload):
-                logging.debug(f"♻️ Doublon ignoré: {mqtt_topic}")
-                return
+            logging.info(f"📩 Message reçu sur {mqtt_topic}")
             
-            # ✅ 2. Log détaillé pour debug
-            logging.info(f"📩 {mqtt_topic} | retain={msg.retain} | qos={msg.qos}")
-            
-            # ✅ 3. Ignorer les messages retain pendant la fenêtre de reconnexion (60s)
-            if msg.retain and current_time < self.ignore_retain_until:
-                remaining = int(self.ignore_retain_until - current_time)
-                logging.info(f"⏸️ RETAIN ignoré ({remaining}s restantes): {mqtt_topic}")
-                return
-            
-            # ✅ 4. Traiter le message
             try:
                 data = json.loads(payload)
                 x = str(data[0].get('catagories')[0].get('alarms')[0].get('company'))
                 company_from_config = str(CONFIG['company_id'])
                 result = x == company_from_config
-                
-                logging.info(f"Company match: {x} vs {CONFIG['company_id']} = {result}")
-                
-                if not result:
-                    return  # Pas le bon company_id, ignorer silencieusement
-                
-                # Préparer les données
-                client_id_value = self._get_client_id()
-                
-                msg_data = {
-                    'topic': mqtt_topic,
-                    'payload': data,
-                    'qos': msg.qos,
-                    'retain': msg.retain,
-                    'client_id': client_id_value,
-                    'machine_info': self.machine_info,
-                    'timestamp': current_time  # ✅ Ajouter timestamp pour traçabilité
-                }
-                
-                # Sauvegarde DB ou buffer
-                if self.db_ready.is_set() and self.mqtt_db:
-                    try:
-                        self.mqtt_db.save_message_async(**msg_data)
-                        logging.debug("✅ Message envoyé à DB")
-                    except Exception as e:
-                        logging.warning(f"⚠️ Échec DB, ajout au retry: {e}")
+                logging.info(f" on message /  company list {x} / company app {CONFIG['company_id']} / {result}")
+                if result:                
+                    # Préparer les données du message
+                    client_id_value = self._get_client_id()
+                    
+                    msg_data = {
+                        'topic': mqtt_topic,
+                        'payload': data,
+                        'qos': msg.qos,
+                        'retain': msg.retain,
+                        'client_id': client_id_value,
+                        'machine_info': self.machine_info
+                    }
+                    
+                    # ✅ AMÉLIORATION : Gestion robuste de la sauvegarde
+                    if self.db_ready.is_set() and self.mqtt_db:
+                        # DB prête : sauvegarder directement
+                        try:
+                            self.mqtt_db.save_message_async(**msg_data)
+                            logging.debug("✅ Message envoyé à DB")
+                        except Exception as e:
+                            logging.warning(f"⚠️ Échec sauvegarde DB, ajout au buffer retry: {e}")
+                            with self.pending_lock:
+                                self.failed_messages.append(msg_data)  # ✅ Retry plus tard
+                    else:
+                        # DB pas prête : buffer + disque
                         with self.pending_lock:
-                            self.failed_messages.append(msg_data)
-                else:
-                    # Buffer si DB pas prête
-                    with self.pending_lock:
-                        if len(self.pending_messages) < self.max_pending:
-                            self.pending_messages.append(msg_data)
-                            logging.debug(f"📦 Bufferisé ({len(self.pending_messages)}/{self.max_pending})")
-                            
-                            if len(self.pending_messages) % 100 == 0:
+                            if len(self.pending_messages) < self.max_pending:
+                                self.pending_messages.append(msg_data)
+                                logging.debug(f"📦 Message bufferisé ({len(self.pending_messages)}/{self.max_pending})")
+                                
+                                # ✅ Sauvegarder périodiquement sur disque
+                                if len(self.pending_messages) % 100 == 0:
+                                    self._save_pending_to_disk()
+                            else:
+                                logging.error(f"🔴 CRITIQUE : Buffer plein ({self.max_pending}), message PERDU !")
+                                # ✅ Forcer sauvegarde disque même si buffer plein
                                 self._save_pending_to_disk()
-                        else:
-                            logging.error(f"🔴 Buffer plein, message PERDU !")
-                            self._save_pending_to_disk()
-                
-                # Notification
-                notification_queue.put((data, mqtt_topic))
+                    
+                    # ✅ Toujours traiter le message pour notification
+                    notification_queue.put((data, mqtt_topic))
                 
             except json.JSONDecodeError as e:
-                logging.error(f"❌ JSON invalide: {e}")
+                logging.error(f"❌ Erreur parsing JSON: {e}")
                 
         except Exception as e:
             logging.error(f"❌ Erreur traitement message: {e}", exc_info=True)
+    
     def _get_client_id(self):
         """✅ Récupère le client_id de manière sûre"""
         try:
@@ -3829,7 +3242,594 @@ class MQTTListener:
             'db_ready': self.db_ready.is_set(),  # ✅ NOUVEAU
             'pending_messages': pending_count,
             'failed_messages': failed_count     # ✅ NOUVEAU
-        }
+        } 
+# class MQTTListener:
+#     def __init__(self, ui_ref=None):
+#         logging.info("📡 Initialisation MQTT Listener avec machine tracking")
+#         self.ui_ref = ui_ref
+        
+#         # Générer les infos de la machine
+#         self.machine_info = self._get_machine_info()
+        
+#         # Créer client_id avec machine_id
+#         client_id = self._generate_client_id()
+        
+#         self.client = mqtt.Client(
+#             client_id=client_id, 
+#             clean_session=True,
+#             callback_api_version=mqtt.CallbackAPIVersion.VERSION2
+#         )
+        
+#         self.client.on_connect = self.on_connect
+#         self.client.on_disconnect = self.on_disconnect
+#         self.client.on_message = self.on_message
+        
+#         # Variables de contrôle
+#         self.last_connect_time = 0
+#         self.ignore_retain_until = 0
+#         self.is_running = True
+#         self.connection_thread = None
+#         self.reconnect_count = 0
+#         self.last_heartbeat_check = time.time()
+        
+#         # ✅ NOUVEAU : Gestion robuste des messages
+#         self.mqtt_db = None
+#         self.db_ready = threading.Event()  # ✅ Signal quand DB est prête
+#         self.db_init_thread = None
+#         self.pending_messages = []
+#         self.pending_lock = threading.Lock()
+#         self.pending_file = Path("pending_mqtt_messages.pkl")  # ✅ Persistance sur disque
+#         self.max_pending = 10000  # ✅ Buffer plus grand
+#         self.failed_messages = []  # ✅ Messages échoués pour retry
+#         self.retry_thread = None
+        
+#         self.recent_messages = []
+#         self.recent_lock = threading.Lock()
+#         self.max_recent = 100
+#         # ✅ CHANGEMENT 1 : Charger messages pendants du disque
+#         self._load_pending_from_disk()
+        
+#         # ✅ CHANGEMENT 2 : Init DB EN PRIORITÉ (synchrone)
+       
+#         threading.Thread(target=self.init_db_sync, daemon=True).start()
+
+#         logging.info(f"🖥️  MQTT Listener prêt pour machine: {self.machine_info['hostname']} (ID: {self.machine_info['machine_id']})")
+#     def _get_message_hash(self, topic, payload):
+#         """Hash unique pour détecter les doublons"""
+#         import hashlib
+#         content = f"{topic}:{payload}:{int(time.time() / 5)}"
+#         return hashlib.md5(content.encode()).hexdigest()[:16]
+
+#     def _is_duplicate(self, topic, payload):
+#         """Vérifie si message déjà vu"""
+#         msg_hash = self._get_message_hash(topic, payload)
+#         with self.recent_lock:
+#             if msg_hash in self.recent_messages:
+#                 return True
+#             self.recent_messages.append(msg_hash)
+#             if len(self.recent_messages) > self.max_recent:
+#                 self.recent_messages.pop(0)
+#             return False
+#     def _load_pending_from_disk(self):
+#         """✅ Charge les messages non envoyés depuis le disque"""
+#         try:
+#             if self.pending_file.exists():
+#                 with open(self.pending_file, 'rb') as f:
+#                     self.pending_messages = pickle.load(f)
+#                 logging.info(f"📦 {len(self.pending_messages)} messages chargés depuis le disque")
+#         except Exception as e:
+#             logging.error(f"❌ Erreur chargement messages: {e}")
+#             self.pending_messages = []
+    
+#     def _save_pending_to_disk(self):
+#         """✅ Sauvegarde les messages en attente sur le disque"""
+#         try:
+#             with self.pending_lock:
+#                 if self.pending_messages:
+#                     with open(self.pending_file, 'wb') as f:
+#                         pickle.dump(self.pending_messages, f)
+#                     logging.debug(f"💾 {len(self.pending_messages)} messages sauvegardés sur disque")
+#                 elif self.pending_file.exists():
+#                     self.pending_file.unlink()  # Supprimer si vide
+#         except Exception as e:
+#             logging.error(f"❌ Erreur sauvegarde messages: {e}")
+    
+#     def init_db_sync(self):
+#         """✅ NOUVEAU : Initialise la DB de manière SYNCHRONE (bloquante)"""
+#         try:
+#             logging.info("💾 Initialisation DB MySQL (prioritaire)...")
+#             self.mqtt_db = MQTTDBHandler()
+            
+#             # ✅ Vérifier que la connexion fonctionne
+#             if self.mqtt_db and self.mqtt_db.pool:
+#                 logging.info("✅ DB MySQL initialisée et connectée")
+#                 self.db_ready.set()  # ✅ Signal que la DB est prête
+                
+#                 # ✅ Vider le buffer après init
+#                 self.flush_pending_messages()
+                
+#                 # ✅ Démarrer thread retry
+#                 self.start_retry_worker()
+#             else:
+#                 raise Exception("Pool de connexion non créé")
+                
+#         except Exception as e:
+#             logging.error(f"❌ CRITIQUE : Échec init DB: {e}")
+#             self.mqtt_db = None
+#             # ✅ On continue quand même, les messages seront bufferisés
+    
+#     def start_retry_worker(self):
+#         """✅ NOUVEAU : Thread qui retente d'envoyer les messages échoués"""
+#         def retry_worker():
+#             while self.is_running:
+#                 time.sleep(10)  # Retry toutes les 10 secondes
+                
+#                 if not self.mqtt_db or not self.db_ready.is_set():
+#                     continue
+                
+#                 # Réessayer les messages échoués
+#                 with self.pending_lock:
+#                     if self.failed_messages:
+#                         logging.info(f"🔄 Retry de {len(self.failed_messages)} messages échoués")
+                        
+#                         retry_list = self.failed_messages.copy()
+#                         self.failed_messages.clear()
+                        
+#                         for msg_data in retry_list:
+#                             try:
+#                                 self.mqtt_db.save_message_async(**msg_data)
+#                             except Exception as e:
+#                                 logging.warning(f"⚠️ Échec retry: {e}")
+#                                 self.failed_messages.append(msg_data)
+        
+#         self.retry_thread = threading.Thread(
+#             target=retry_worker,
+#             daemon=True,
+#             name="MQTT-Retry-Worker"
+#         )
+#         self.retry_thread.start()
+#         logging.info("🔄 Worker retry démarré")
+    
+#     def flush_pending_messages(self):
+#         """✅ Envoie tous les messages en attente vers la DB"""
+#         with self.pending_lock:
+#             if not self.pending_messages:
+#                 logging.debug("📭 Aucun message en attente")
+#                 return
+            
+#             logging.info(f"📤 Envoi de {len(self.pending_messages)} messages en attente vers DB...")
+            
+#             success_count = 0
+#             fail_count = 0
+            
+#             for msg_data in self.pending_messages:
+#                 try:
+#                     self.mqtt_db.save_message_async(**msg_data)
+#                     success_count += 1
+#                 except Exception as e:
+#                     logging.warning(f"⚠️ Erreur envoi message: {e}")
+#                     self.failed_messages.append(msg_data)  # ✅ Ajouter aux échecs
+#                     fail_count += 1
+            
+#             # Vider le buffer
+#             self.pending_messages.clear()
+#             self._save_pending_to_disk()  # ✅ Nettoyer le disque
+            
+#             logging.info(f"✅ {success_count} envoyés, {fail_count} échoués")
+    
+#     def _get_machine_info(self):
+#         """Récupère les informations uniques de la machine"""
+#         try:
+#             import platform
+#             import uuid
+#             import hashlib
+            
+#             # Nom d'hôte
+#             hostname = platform.node()
+            
+#             # Adresse MAC
+#             mac_num = hex(uuid.getnode()).replace('0x', '').upper()
+#             mac = ':'.join(mac_num[i:i+2] for i in range(0, 11, 2)) if len(mac_num) >= 12 else '00:00:00:00:00:00'
+            
+#             # Adresse IP
+#             try:
+#                 s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+#                 s.connect(('8.8.8.8', 80))
+#                 ip = s.getsockname()[0]
+#                 s.close()
+#             except:
+#                 try:
+#                     ip = socket.gethostbyname(hostname)
+#                 except:
+#                     ip = '127.0.0.1'
+            
+#             # Générer un ID unique
+#             unique_string = f"{hostname}_{mac}_{ip}"
+#             machine_id = hashlib.md5(unique_string.encode()).hexdigest()[:12]
+            
+#             machine_info = {
+#                 'machine_id': f"PC_{machine_id}",
+#                 'hostname': hostname,
+#                 'ip': ip,
+#                 'mac': mac,
+#                 'system': platform.system(),
+#                 'release': platform.release()
+#             }
+            
+#             return machine_info
+            
+#         except Exception as e:
+#             logging.error(f"❌ Erreur récupération infos machine: {e}")
+#             import uuid
+#             return {
+#                 'machine_id': f"PC_{uuid.uuid4().hex[:8]}",
+#                 'hostname': 'unknown',
+#                 'ip': '127.0.0.1',
+#                 'mac': '00:00:00:00:00:00',
+#                 'system': 'unknown',
+#                 'release': 'unknown'
+#             }
+    
+#     def _generate_client_id(self):
+#         """Génère un client_id unique avec machine_id"""
+#         timestamp = int(time.time())
+#         random_suffix = random.randint(1000, 9999)
+#         machine_short_id = self.machine_info['machine_id'].replace('PC_', '')[:6]
+#         return f"zonex_{machine_short_id}_{timestamp}_{random_suffix}"
+    
+#     def on_connect(self, client, userdata, flags, reason_code, properties):
+#         """Callback pour connexion MQTT"""
+#         current_time = time.time()
+        
+#         if reason_code == 0:
+#             self.reconnect_count = 0
+#             self.last_heartbeat_check = current_time  # ✅ Reset heartbeat
+#             logging.info(f"✅ Connecté au broker MQTT depuis {self.machine_info['hostname']}")
+            
+#             # Gérer reconnexion
+#             if current_time - self.last_connect_time < 60:
+#                 logging.info("⚠️ Reconnexion rapide - ignore retain 60s")
+#                 self.ignore_retain_until = current_time + 60
+            
+#             self.last_connect_time = current_time
+            
+#             # ✅ Mettre à jour UI dans le thread Tkinter
+#             if self.ui_ref:
+#                 try:
+#                     self.ui_ref.root.after(0, lambda: self.ui_ref.update_mqtt_status(True))
+#                 except Exception as e:
+#                     logging.warning(f"⚠️ Erreur MAJ UI: {e}")
+            
+#             # S'abonner avec vérification
+#             try:
+#                 if 'mqtt_topic' in CONFIG:
+#                     topic = CONFIG['mqtt_topic']
+#                     result, mid = client.subscribe(topic, qos=1)
+#                     if result == mqtt.MQTT_ERR_SUCCESS:
+#                         logging.info(f"✅ Souscrit: {topic} (QoS 1)")
+#                     else:
+#                         logging.error(f"❌ Échec souscription: {result}")
+#                 else:
+#                     result, mid = client.subscribe("alert_grouped/#", qos=1)
+#                     if result == mqtt.MQTT_ERR_SUCCESS:
+#                         logging.info(f"✅ Souscrit au topic par défaut: alert_grouped/# (QoS 1)")
+#                     else:
+#                         logging.error(f"❌ Échec souscription au topic par défaut: {result}")
+                        
+#             except Exception as e:
+#                 logging.error(f"❌ Erreur lors de la souscription: {e}")
+#         else:
+#             self.reconnect_count += 1
+#             logging.error(f"❌ Erreur connexion MQTT: {reason_code} (reconnexion #{self.reconnect_count})")
+#             if self.ui_ref:
+#                 try:
+#                     self.ui_ref.root.after(0, lambda: self.ui_ref.update_mqtt_status(False))
+#                 except:
+#                     pass
+    
+#     def on_disconnect(self, client, userdata, disconnect_flags, reason_code, properties):
+#         """Callback pour déconnexion MQTT"""
+#         logging.warning(f"⚠️ Déconnecté du broker MQTT depuis {self.machine_info['hostname']} - Raison: {reason_code}")
+#         self.last_connect_time = time.time()
+        
+#         # ✅ Mettre à jour UI immédiatement
+#         if self.ui_ref:
+#             try:
+#                 self.ui_ref.root.after(0, lambda: self.ui_ref.update_mqtt_status(False))
+#             except:
+#                 pass
+        
+#         # Afficher message explicite selon le code d'erreur
+#         if reason_code == 7:
+#             logging.warning("🌐 Perte de connexion réseau détectée")
+#         elif reason_code != 0:
+#             logging.warning(f"🔌 Déconnexion inattendue (code: {reason_code})")
+    
+#     def on_message(self, client, userdata, msg):
+#         """Callback pour message MQTT"""
+#         try:
+#             current_time = time.time()
+#             self.last_heartbeat_check = current_time
+            
+#             payload = msg.payload.decode('utf-8')
+#             mqtt_topic = msg.topic
+            
+#             # ✅ 1. Vérifier doublon en PREMIER (avant tout traitement)
+#             if self._is_duplicate(mqtt_topic, payload):
+#                 logging.debug(f"♻️ Doublon ignoré: {mqtt_topic}")
+#                 return
+            
+#             # ✅ 2. Log détaillé pour debug
+#             logging.info(f"📩 {mqtt_topic} | retain={msg.retain} | qos={msg.qos}")
+            
+#             # ✅ 3. Ignorer les messages retain pendant la fenêtre de reconnexion (60s)
+#             if msg.retain and current_time < self.ignore_retain_until:
+#                 remaining = int(self.ignore_retain_until - current_time)
+#                 logging.info(f"⏸️ RETAIN ignoré ({remaining}s restantes): {mqtt_topic}")
+#                 return
+            
+#             # ✅ 4. Traiter le message
+#             try:
+#                 data = json.loads(payload)
+#                 x = str(data[0].get('catagories')[0].get('alarms')[0].get('company'))
+#                 company_from_config = str(CONFIG['company_id'])
+#                 result = x == company_from_config
+                
+#                 logging.info(f"Company match: {x} vs {CONFIG['company_id']} = {result}")
+                
+#                 if not result:
+#                     return  # Pas le bon company_id, ignorer silencieusement
+                
+#                 # Préparer les données
+#                 client_id_value = self._get_client_id()
+                
+#                 msg_data = {
+#                     'topic': mqtt_topic,
+#                     'payload': data,
+#                     'qos': msg.qos,
+#                     'retain': msg.retain,
+#                     'client_id': client_id_value,
+#                     'machine_info': self.machine_info,
+#                     'timestamp': current_time  # ✅ Ajouter timestamp pour traçabilité
+#                 }
+                
+#                 # Sauvegarde DB ou buffer
+#                 if self.db_ready.is_set() and self.mqtt_db:
+#                     try:
+#                         self.mqtt_db.save_message_async(**msg_data)
+#                         logging.debug("✅ Message envoyé à DB")
+#                     except Exception as e:
+#                         logging.warning(f"⚠️ Échec DB, ajout au retry: {e}")
+#                         with self.pending_lock:
+#                             self.failed_messages.append(msg_data)
+#                 else:
+#                     # Buffer si DB pas prête
+#                     with self.pending_lock:
+#                         if len(self.pending_messages) < self.max_pending:
+#                             self.pending_messages.append(msg_data)
+#                             logging.debug(f"📦 Bufferisé ({len(self.pending_messages)}/{self.max_pending})")
+                            
+#                             if len(self.pending_messages) % 100 == 0:
+#                                 self._save_pending_to_disk()
+#                         else:
+#                             logging.error(f"🔴 Buffer plein, message PERDU !")
+#                             self._save_pending_to_disk()
+                
+#                 # Notification
+#                 notification_queue.put((data, mqtt_topic))
+                
+#             except json.JSONDecodeError as e:
+#                 logging.error(f"❌ JSON invalide: {e}")
+                
+#         except Exception as e:
+#             logging.error(f"❌ Erreur traitement message: {e}", exc_info=True)
+#     def _get_client_id(self):
+#         """✅ Récupère le client_id de manière sûre"""
+#         try:
+#             if hasattr(self.client, '_client_id'):
+#                 if isinstance(self.client._client_id, bytes):
+#                     return self.client._client_id.decode('utf-8')
+#                 else:
+#                     return str(self.client._client_id)
+#         except:
+#             pass
+#         return self._generate_client_id()
+    
+#     def check_network_availability(self):
+#         """Vérifie si Internet est disponible"""
+#         try:
+#             socket.setdefaulttimeout(3)
+#             socket.gethostbyname('www.google.com')
+#             return True
+#         except:
+#             return False
+#         finally:
+#             socket.setdefaulttimeout(None)
+    
+#     def wait_for_network(self, max_wait=60):
+#         """Attend que le réseau soit disponible"""
+#         logging.info("🔍 Attente disponibilité réseau...")
+#         start_time = time.time()
+        
+#         while time.time() - start_time < max_wait and self.is_running:
+#             if self.check_network_availability():
+#                 logging.info("✅ Réseau disponible")
+#                 return True
+            
+#             logging.debug("⏳ Réseau non disponible, attente 3s...")
+#             time.sleep(3)
+        
+#         logging.warning("⏰ Timeout attente réseau")
+#         return False
+    
+#     def start_heartbeat_monitor(self):
+#         """✅ Moniteur actif - détecte ET force la reconnexion"""
+#         def monitor():
+#             logging.info("💓 Démarrage moniteur heartbeat")
+            
+#             while self.is_running:
+#                 time.sleep(2)  # Vérifier toutes les 2 secondes
+                
+#                 current_time = time.time()
+#                 time_since_last = current_time - self.last_heartbeat_check
+                
+#                 # ✅ Si pas de signe de vie depuis 8s
+#                 if time_since_last > 8:
+                    
+#                     # ✅ Vérifier vraiment l'état de la connexion
+#                     if not self.client.is_connected():
+#                         logging.warning(f"⚠️ Déconnexion détectée ({time_since_last:.0f}s sans activité)")
+                        
+#                         # ✅ Mettre à jour UI
+#                         if self.ui_ref:
+#                             try:
+#                                 self.ui_ref.root.after(0, lambda: self.ui_ref.update_mqtt_status(False))
+#                             except:
+#                                 pass
+                        
+#                         # ✅✅✅ FORCER LA RECONNEXION
+#                         try:
+#                             logging.info("🔄 Force reconnexion...")
+#                             self.client.reconnect()
+#                             self.last_heartbeat_check = current_time
+#                         except Exception as e:
+#                             logging.debug(f"⚠️ Reconnexion impossible: {e}")
+#                     else:
+#                         # Connecté mais pas de message → reset timer
+#                         self.last_heartbeat_check = current_time
+        
+#         threading.Thread(target=monitor, daemon=True, name="MQTT-Heartbeat").start()
+    
+#     def connect_with_retry(self):
+#         """Connexion avec reconnexion automatique"""
+        
+#         # ✅ Configuration reconnexion automatique RAPIDE
+#         self.client.reconnect_delay_set(min_delay=1, max_delay=30)
+        
+#         while self.is_running:
+#             try:
+#                 # Vérifier réseau
+#                 if not self.check_network_availability():
+#                     logging.info("⏳ Pas de réseau, attente...")
+#                     if not self.wait_for_network(max_wait=60):
+#                         time.sleep(3)
+#                         continue
+                
+#                 logging.info(f"🔗 Connexion MQTT depuis {self.machine_info['hostname']}...")
+                
+#                 try:
+#                     # ✅ Keepalive 15s (compromis entre 5 et 30)
+#                     self.client.connect(
+#                         CONFIG.get('mqtt_broker', 'localhost'),
+#                         CONFIG.get('mqtt_port', 1883),
+#                         keepalive=15
+#                     )
+#                 except Exception as e:
+#                     logging.error(f"❌ Échec connexion: {e}")
+#                     time.sleep(3)
+#                     continue
+                
+#                 logging.info("✅ Lancement boucle MQTT...")
+                
+#                 # ✅ Boucle avec reconnexion automatique
+#                 self.client.loop_forever(retry_first_connection=True)
+                
+#                 if not self.is_running:
+#                     break
+                    
+#                 logging.warning("⚠️ Boucle MQTT terminée, redémarrage...")
+#                 time.sleep(2)
+                
+#             except KeyboardInterrupt:
+#                 break
+#             except Exception as e:
+#                 logging.error(f"❌ Erreur: {e}")
+#                 time.sleep(3)
+    
+#     def start(self):
+#         """Démarre le listener MQTT"""
+#         if self.connection_thread and self.connection_thread.is_alive():
+#             logging.warning("⚠️ MQTT Listener déjà démarré")
+#             return
+        
+#         self.is_running = True
+        
+#         # ✅ DB déjà initialisée dans __init__, on démarre juste MQTT
+#         self.connection_thread = threading.Thread(
+#             target=self.connect_with_retry,
+#             daemon=True,
+#             name=f"MQTT-Thread-{self.machine_info['hostname']}"
+#         )
+#         self.connection_thread.start()
+        
+#         # Démarrer heartbeat
+#         self.start_heartbeat_monitor()
+        
+#         logging.info(f"✅ MQTT Listener démarré sur {self.machine_info['hostname']}")
+    
+#     def stop(self):
+#         """Arrête proprement le listener"""
+#         logging.info(f"🛑 Arrêt du MQTT Listener...")
+#         self.is_running = False
+        
+#         # ✅ Sauvegarder les messages en attente
+#         self._save_pending_to_disk()
+        
+#         if self.mqtt_db:
+#             self.mqtt_db.stop()
+        
+#         try:
+#             self.client.disconnect()
+#             self.client.loop_stop()
+#         except:
+#             pass
+        
+#         if self.connection_thread:
+#             self.connection_thread.join(timeout=5)
+        
+#         logging.info("✅ MQTT Listener arrêté")
+    
+#     def publish(self, topic, payload, qos=1, retain=False):
+#         """Publie un message MQTT"""
+#         try:
+#             if isinstance(payload, dict):
+#                 payload = json.dumps(payload)
+            
+#             result = self.client.publish(topic, payload, qos=qos, retain=retain)
+            
+#             if result.rc == mqtt.MQTT_ERR_SUCCESS:
+#                 logging.info(f"✅ Publié sur {topic} (QoS {qos})")
+#                 return True
+#             else:
+#                 logging.error(f"❌ Erreur publication: {result.rc}")
+#                 return False
+#         except Exception as e:
+#             logging.error(f"❌ Exception publication: {e}")
+#             return False
+    
+#     def get_status(self):
+#         """Retourne le statut du listener"""
+#         with self.pending_lock:
+#             pending_count = len(self.pending_messages)
+#             failed_count = len(self.failed_messages)
+        
+#         db_connected = False
+#         if self.mqtt_db and hasattr(self.mqtt_db, 'pool'):
+#             db_connected = self.mqtt_db.pool is not None
+        
+#         return {
+#             'machine_id': self.machine_info['machine_id'],
+#             'hostname': self.machine_info['hostname'],
+#             'ip': self.machine_info['ip'],
+#             'is_running': self.is_running,
+#             'connected': self.client.is_connected(),
+#             'reconnect_count': self.reconnect_count,
+#             'last_connect': self.last_connect_time,
+#             'db_connected': db_connected,
+#             'db_ready': self.db_ready.is_set(),  # ✅ NOUVEAU
+#             'pending_messages': pending_count,
+#             'failed_messages': failed_count     # ✅ NOUVEAU
+#         }
 
 # mqtt_db_handler.py
 import json
