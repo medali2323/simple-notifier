@@ -1,0 +1,26 @@
+# Notifications Windows
+winotify
+win10toast-click
+
+# GUI
+Pillow
+
+# MQTT
+paho-mqtt
+
+# HTTP requests
+requests
+
+# Environnement
+python-dotenv
+
+# Base de données
+mysql-connector-python
+
+# Systray icon
+pystray
+
+# Windows API
+pywin32
+
+# Autres
